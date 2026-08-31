@@ -204,7 +204,7 @@ def dashboard(db: Session = Depends(get_db)):
     debt_total = db.scalar(select(func.coalesce(func.sum(Debt.current_balance), 0)).where(Debt.status != "quitada"))
     upcoming = db.scalars(select(Expense).where(Expense.status == "pendente", Expense.due_on.between(date.today(), date.today() + timedelta(days=30))).order_by(Expense.due_on)).all()
     by_category = db.execute(select(Expense.category, func.sum(Expense.amount)).where(Expense.status != "cancelado").group_by(Expense.category).order_by(func.sum(Expense.amount).desc())).all()
-    return {"income": income, "expenses": expenses_total, "paid_expenses": paid, "available": income - expenses_total, "debt_total": debt_total, "upcoming": [{"description": x.description, "due_on": x.due_on, "amount": x.amount} for x in upcoming], "expenses_by_category": [{"category": x[0], "amount": x[1]} for x in by_category]}
+    return {"income": income, "expenses": expenses_total, "paid_expenses": paid, "available": income - expenses_total, "debt_total": debt_total, "upcoming": [{"description": x.description, "due_on": x.due_on, "amount": x.amount, "needs_review": date.today() >= x.due_on - timedelta(days=x.review_before_days), "installment": f"{x.installment_number}/{x.installments_total}" if x.installments_total > 1 else None} for x in upcoming], "expenses_by_category": [{"category": x[0], "amount": x[1]} for x in by_category]}
 
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
 def home():
