@@ -17,6 +17,7 @@ class Income(AuditMixin, Base):
     recurring: Mapped[bool] = mapped_column(Boolean, default=False)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     source_id: Mapped[int | None] = mapped_column(ForeignKey("income_sources.id"), nullable=True)
+    income_type: Mapped[str] = mapped_column(String(40), default="Salário CLT")
 
 class IncomeSource(AuditMixin, Base):
     __tablename__ = "income_sources"
@@ -24,6 +25,11 @@ class IncomeSource(AuditMixin, Base):
     monthly_salary: Mapped[Decimal] = mapped_column(Numeric(12, 2))
     source_type: Mapped[str] = mapped_column(String(40), default="Emprego")
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+class Category(AuditMixin, Base):
+    __tablename__ = "categories"
+    name: Mapped[str] = mapped_column(String(80), unique=True)
+    kind: Mapped[str] = mapped_column(String(20), default="despesa")
 
 class Expense(AuditMixin, Base):
     __tablename__ = "expenses"
@@ -35,6 +41,9 @@ class Expense(AuditMixin, Base):
     status: Mapped[str] = mapped_column(String(20), default="pendente")
     recurring: Mapped[bool] = mapped_column(Boolean, default=False)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    installments_total: Mapped[int] = mapped_column(default=1)
+    installment_number: Mapped[int] = mapped_column(default=1)
+    review_before_days: Mapped[int] = mapped_column(default=5)
 
 class Debt(AuditMixin, Base):
     __tablename__ = "debts"

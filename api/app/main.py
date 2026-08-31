@@ -1,4 +1,5 @@
 from datetime import date, timedelta
+import calendar
 from decimal import Decimal
 import base64, hashlib, hmac, os, secrets
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
@@ -7,7 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from .database import Base, engine, get_db
-from .models import Agreement, Debt, Expense, Income, IncomeSource, Payment, User
+from .models import Agreement, Category, Debt, Expense, Income, IncomeSource, Payment, User
 from .schemas import *
 
 app = FastAPI(title="Controle Financeiro Pessoal", version="0.1.0", docs_url=None, redoc_url=None)
@@ -50,6 +51,22 @@ def initialize_database():
             columns = {column[1] for column in connection.exec_driver_sql("PRAGMA table_info(incomes)")}
             if "source_id" not in columns:
                 connection.exec_driver_sql("ALTER TABLE incomes ADD COLUMN source_id INTEGER")
+            if "income_type" not in columns:
+                connection.exec_driver_sql("ALTER TABLE incomes ADD COLUMN income_type VARCHAR(40) DEFAULT 'Salário CLT'")
+            expense_columns = {column[1] for column in connection.exec_driver_sql("PRAGMA table_info(expenses)")}
+            for column, definition in [("installments_total", "INTEGER DEFAULT 1"), ("installment_number", "INTEGER DEFAULT 1"), ("review_before_days", "INTEGER DEFAULT 5")]:
+                if column not in expense_columns:
+                    connection.exec_driver_sql(f"ALTER TABLE expenses ADD COLUMN {column} {definition}")
+    with Session(engine) as db:
+        if not db.scalar(select(func.count()).select_from(Category)):
+            db.add_all(Category(name=name) for name in [
+                "Aluguel", "Condomínio", "Financiamento", "Empréstimo", "Cartão de crédito",
+                "Energia elétrica", "Água", "Gás", "Internet", "Celular", "Seguro",
+                "Mercado", "Lazer", "Restaurantes", "IFood", "99 Food", "Transporte",
+                "Combustível", "Uber", "99", "Saúde", "Farmácia", "Academia", "Educação",
+                "Assinaturas", "Vestuário", "Pets", "Impostos", "Manutenção", "Outros"
+            ])
+            db.commit()
 
 @app.get("/api/auth/status")
 def auth_status(request: Request, db: Session = Depends(get_db)):
@@ -111,10 +128,32 @@ def edit_income_source(item_id: int, data: IncomeSourceIn, db: Session = Depends
 @app.delete("/api/income-sources/{item_id}", status_code=204)
 def delete_income_source(item_id: int, db: Session = Depends(get_db)): remove(db, IncomeSource, item_id)
 
+@app.get("/api/categories", response_model=list[CategoryOut])
+def categories(db: Session = Depends(get_db)): return db.scalars(select(Category).order_by(Category.name)).all()
+@app.post("/api/categories", response_model=CategoryOut, status_code=201)
+def add_category(data: CategoryIn, db: Session = Depends(get_db)): return create(db, Category, data)
+@app.put("/api/categories/{item_id}", response_model=CategoryOut)
+def edit_category(item_id: int, data: CategoryIn, db: Session = Depends(get_db)): return update(db, Category, item_id, data)
+@app.delete("/api/categories/{item_id}", status_code=204)
+def delete_category(item_id: int, db: Session = Depends(get_db)): remove(db, Category, item_id)
+
 @app.get("/api/expenses", response_model=list[ExpenseOut])
 def expenses(db: Session = Depends(get_db)): return list_rows(db, Expense)
 @app.post("/api/expenses", response_model=ExpenseOut, status_code=201)
-def add_expense(data: ExpenseIn, db: Session = Depends(get_db)): return create(db, Expense, data)
+def add_expense(data: ExpenseIn, db: Session = Depends(get_db)):
+    if not data.recurring or data.installments_total == 1:
+        return create(db, Expense, data)
+    rows = []
+    for number in range(1, data.installments_total + 1):
+        month_index = data.due_on.month - 1 + number - 1
+        year = data.due_on.year + month_index // 12
+        month = month_index % 12 + 1
+        due_on = date(year, month, min(data.due_on.day, calendar.monthrange(year, month)[1]))
+        payload = data.model_dump(); payload.update(due_on=due_on, installment_number=number)
+        row = Expense(**payload)
+        rows.append(row)
+    db.add_all(rows); db.commit(); db.refresh(rows[0])
+    return rows[0]
 @app.put("/api/expenses/{item_id}", response_model=ExpenseOut)
 def edit_expense(item_id: int, data: ExpenseIn, db: Session = Depends(get_db)): return update(db, Expense, item_id, data)
 @app.delete("/api/expenses/{item_id}", status_code=204)

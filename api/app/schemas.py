@@ -9,6 +9,7 @@ class IncomeIn(BaseModel):
     description: str = Field(max_length=160); amount: Decimal = Field(gt=0); received_on: date
     category: str = "Outros"; recurring: bool = False; notes: str | None = None
     source_id: int | None = None
+    income_type: str = "Salário CLT"
 class IncomeOut(IncomeIn, ORM): id: int; created_at: datetime
 
 class IncomeSourceIn(BaseModel):
@@ -18,6 +19,11 @@ class IncomeSourceIn(BaseModel):
     active: bool = True
 class IncomeSourceOut(IncomeSourceIn, ORM): id: int; created_at: datetime
 
+class CategoryIn(BaseModel):
+    name: str = Field(min_length=2, max_length=80)
+    kind: str = "despesa"
+class CategoryOut(CategoryIn, ORM): id: int; created_at: datetime
+
 class AuthIn(BaseModel):
     username: str = Field(min_length=3, max_length=80)
     password: str = Field(min_length=8, max_length=200)
@@ -25,6 +31,9 @@ class AuthIn(BaseModel):
 class ExpenseIn(BaseModel):
     description: str = Field(max_length=160); amount: Decimal = Field(gt=0); due_on: date
     paid_on: date | None = None; category: str = "Outros"; status: str = "pendente"; recurring: bool = False; notes: str | None = None
+    installments_total: int = Field(default=1, ge=1, le=600)
+    installment_number: int = Field(default=1, ge=1)
+    review_before_days: int = Field(default=5, ge=0, le=30)
 class ExpenseOut(ExpenseIn, ORM): id: int; created_at: datetime
 
 class DebtIn(BaseModel):
