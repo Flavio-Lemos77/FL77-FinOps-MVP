@@ -1,0 +1,82 @@
+services:
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # API FastAPI
+  # ──────────────────────────────────────────────────────────────────────────
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    container_name: finops_api
+    restart: unless-stopped
+    environment:
+      ENV: production
+      APP_SESSION_SECRET: ${APP_SESSION_SECRET}
+      DATABASE_URL: ${DATABASE_URL:-sqlite:////data/financeiro.db}
+      LOGIN_RATE_LIMIT: ${LOGIN_RATE_LIMIT:-10}
+      LOGIN_RATE_WINDOW: ${LOGIN_RATE_WINDOW:-60}
+    volumes:
+      # Persiste o banco SQLite fora do container
+      - db_data:/data
+    networks:
+      - internal
+    # A porta 8000 NÃO é exposta para o host — só o Nginx acessa internamente
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Nginx — proxy reverso
+  # ──────────────────────────────────────────────────────────────────────────
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: finops_nginx
+    restart: unless-stopped
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    networks:
+      - internal
+      - tunnel
+    depends_on:
+      api:
+        condition: service_healthy
+    # Expõe localmente só para debug — em produção o acesso vem pelo tunnel
+    ports:
+      - "127.0.0.1:8080:80"
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Cloudflare Tunnel — expõe o app na internet sem abrir portas no firewall
+  # ──────────────────────────────────────────────────────────────────────────
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: finops_tunnel
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN}
+    networks:
+      - tunnel
+    depends_on:
+      - nginx
+
+# ──────────────────────────────────────────────────────────────────────────
+# Volumes e redes
+# ──────────────────────────────────────────────────────────────────────────
+volumes:
+  db_data:
+    driver: local
+
+networks:
+  # Rede interna: apenas api e nginx se comunicam aqui
+  internal:
+    driver: bridge
+    internal: true
+  # Rede do tunnel: nginx e cloudflared
+  tunnel:
+    driver: bridge

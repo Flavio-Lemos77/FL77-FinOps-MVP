@@ -1,0 +1,25 @@
+# Git
+.git
+.gitignore
+
+# Ambiente virtual local
+.venv
+__pycache__
+*.pyc
+*.pyo
+
+# Banco SQLite local de desenvolvimento
+*.db
+*.sqlite3
+
+# Variáveis de ambiente (nunca vai para a imagem)
+.env
+
+# Arquivos Windows
+iniciar.ps1
+Thumbs.db
+
+# Docs
+README.md
+HANDOFF.md
+DEPLOY.md
