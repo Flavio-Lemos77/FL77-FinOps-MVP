@@ -41,11 +41,23 @@ Write-Host "Instalando/atualizando dependências..." -ForegroundColor Yellow
 & $VenvPython -m pip install --quiet -r $Req
 
 # ── Variáveis de ambiente para desenvolvimento ────────────────────────────
-$env:ENV              = "development"
-$env:DATABASE_URL     = "sqlite:///$ApiDir/financeiro.db"
-# Em desenvolvimento a chave é gerada automaticamente a cada início —
-# se quiser sessões persistentes entre reinicios, defina aqui:
-# $env:APP_SESSION_SECRET = "minha-chave-de-dev"
+$env:ENV = "development"
+
+# Banco SQLite com caminho absoluto em formato URI correto (barras normais)
+$DbPath = ($ApiDir -replace '\\', '/') + "/financeiro.db"
+$env:DATABASE_URL = "sqlite:///$DbPath"
+
+# Chave de sessão persistente para desenvolvimento:
+# gerada uma única vez e salva num arquivo local — assim o login não some
+# a cada vez que você reinicia o servidor.
+$SecretFile = Join-Path $Root ".dev_secret"
+if (-not (Test-Path $SecretFile)) {
+    $NewSecret = -join ((65..90) + (97..122) + (48..57) |
+        Get-Random -Count 48 | ForEach-Object { [char]$_ })
+    Set-Content -Path $SecretFile -Value $NewSecret -NoNewline
+    Write-Host "Chave de sessão de desenvolvimento criada em .dev_secret" -ForegroundColor Yellow
+}
+$env:APP_SESSION_SECRET = Get-Content -Path $SecretFile -Raw
 
 # ── Iniciar Uvicorn ───────────────────────────────────────────────────────
 Write-Host ""

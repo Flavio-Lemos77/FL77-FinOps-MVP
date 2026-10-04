@@ -4,3 +4,6 @@
 *.sqlite3
 __pycache__/
 *.pyc
+
+# Chave de sessão local de desenvolvimento (gerada pelo iniciar.ps1)
+.dev_secret
