@@ -146,6 +146,19 @@ def _initialize_database() -> None:
                         f"ALTER TABLE expenses ADD COLUMN {col_name} {definition}"
                     )
 
+            debt_cols = {
+                col[1]
+                for col in conn.exec_driver_sql("PRAGMA table_info(debts)")
+            }
+            for col_name, definition in [
+                ("monthly_installment", "NUMERIC(12,2)"),
+                ("debt_type", "VARCHAR(60) DEFAULT 'Outros'"),
+            ]:
+                if col_name not in debt_cols:
+                    conn.exec_driver_sql(
+                        f"ALTER TABLE debts ADD COLUMN {col_name} {definition}"
+                    )
+
     # Seed das categorias padrão na primeira execução
     with Session(engine) as db:
         if not db.scalar(select(func.count()).select_from(Category)):

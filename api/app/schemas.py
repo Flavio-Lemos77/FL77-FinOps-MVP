@@ -37,9 +37,15 @@ class ExpenseIn(BaseModel):
 class ExpenseOut(ExpenseIn, ORM): id: int; created_at: datetime
 
 class DebtIn(BaseModel):
-    creditor: str = Field(max_length=160); original_amount: Decimal = Field(gt=0); current_balance: Decimal = Field(ge=0)
-    interest_rate: Decimal | None = Field(default=None, ge=0); due_day: int | None = Field(default=None, ge=1, le=31)
-    status: str = "ativa"; notes: str | None = None
+    creditor: str = Field(max_length=160)
+    debt_type: str = "Outros"
+    original_amount: Decimal = Field(gt=0)
+    current_balance: Decimal = Field(ge=0)
+    monthly_installment: Decimal | None = Field(default=None, ge=0)
+    interest_rate: Decimal | None = Field(default=None, ge=0)
+    due_day: int | None = Field(default=None, ge=1, le=31)
+    status: str = "ativa"
+    notes: str | None = None
 class DebtOut(DebtIn, ORM): id: int; created_at: datetime
 
 class AgreementIn(BaseModel):

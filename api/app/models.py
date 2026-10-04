@@ -48,8 +48,10 @@ class Expense(AuditMixin, Base):
 class Debt(AuditMixin, Base):
     __tablename__ = "debts"
     creditor: Mapped[str] = mapped_column(String(160))
+    debt_type: Mapped[str] = mapped_column(String(60), default="Outros")
     original_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
     current_balance: Mapped[Decimal] = mapped_column(Numeric(12, 2))
+    monthly_installment: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
     interest_rate: Mapped[Decimal | None] = mapped_column(Numeric(6, 3), nullable=True)
     due_day: Mapped[int | None] = mapped_column(nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="ativa")
