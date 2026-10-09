@@ -629,24 +629,48 @@ def delete_payment(item_id: int, db: Session = Depends(get_db)):
 
 @app.get("/api/dashboard")
 def dashboard(db: Session = Depends(get_db)):
+    # Receitas: tudo que entrou (salário etc.)
     income = db.scalar(
         select(func.coalesce(func.sum(Income.amount), 0))
     )
+    # Despesas lançadas (exceto canceladas) — inclui parcelas futuras pendentes
     expenses_total = db.scalar(
         select(func.coalesce(func.sum(Expense.amount), 0)).where(
             Expense.status != "cancelado"
         )
     )
+    # Despesas efetivamente PAGAS (dinheiro que já saiu)
     paid = db.scalar(
         select(func.coalesce(func.sum(Expense.amount), 0)).where(
             Expense.status == "pago"
         )
     )
+    # Despesas pendentes (a vencer) — compromisso futuro, não abate caixa
+    pending = db.scalar(
+        select(func.coalesce(func.sum(Expense.amount), 0)).where(
+            Expense.status == "pendente"
+        )
+    )
+    # Pagamentos de dívidas (dinheiro que já saiu para quitar dívidas)
+    debt_payments = db.scalar(
+        select(func.coalesce(func.sum(Payment.amount), 0))
+    )
+    # Saldo das dívidas em aberto
     debt_total = db.scalar(
         select(func.coalesce(func.sum(Debt.current_balance), 0)).where(
             Debt.status != "quitada"
         )
     )
+    # Comprometimento mensal fixo (soma das prestações das dívidas ativas)
+    monthly_commitment = db.scalar(
+        select(func.coalesce(func.sum(Debt.monthly_installment), 0)).where(
+            Debt.status != "quitada"
+        )
+    )
+
+    # SALDO DISPONÍVEL (caixa real) = receitas - despesas pagas - pagamentos de dívida
+    available = income - paid - debt_payments
+
     upcoming = db.scalars(
         select(Expense)
         .where(
@@ -668,7 +692,10 @@ def dashboard(db: Session = Depends(get_db)):
         "income": income,
         "expenses": expenses_total,
         "paid_expenses": paid,
-        "available": income - expenses_total,
+        "pending_expenses": pending,
+        "debt_payments": debt_payments,
+        "monthly_commitment": monthly_commitment,
+        "available": available,
         "debt_total": debt_total,
         "upcoming": [
             {
@@ -688,6 +715,131 @@ def dashboard(db: Session = Depends(get_db)):
         "expenses_by_category": [
             {"category": row[0], "amount": row[1]} for row in by_category
         ],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Analytics / BI — séries temporais e indicadores
+# ---------------------------------------------------------------------------
+
+@app.get("/api/analytics")
+def analytics(months: int = 12, db: Session = Depends(get_db)):
+    """Retorna séries mensais e indicadores para a aba BI.
+
+    - months: quantos meses retroativos considerar (default 12).
+    Para cada mês: receitas, despesas pagas, despesas lançadas, pagamentos de
+    dívida, saída total (pagas + pagamentos) e saldo do mês (receitas - saída).
+    Também devolve o saldo acumulado e indicadores de saúde financeira.
+    """
+    from decimal import Decimal
+
+    hoje = date.today()
+    # monta a lista dos últimos N meses como "YYYY-MM"
+    def ym(d):
+        return f"{d.year:04d}-{d.month:02d}"
+
+    buckets = []
+    y, m = hoje.year, hoje.month
+    for _ in range(months):
+        buckets.append(f"{y:04d}-{m:02d}")
+        m -= 1
+        if m == 0:
+            m = 12
+            y -= 1
+    buckets.reverse()
+    bucket_set = set(buckets)
+
+    income_by  = {b: 0.0 for b in buckets}
+    paid_by    = {b: 0.0 for b in buckets}
+    launch_by  = {b: 0.0 for b in buckets}
+    paym_by    = {b: 0.0 for b in buckets}
+
+    # Receitas por mês de recebimento
+    for d, amt in db.execute(select(Income.received_on, Income.amount)):
+        if d is None:
+            continue
+        k = ym(d)
+        if k in bucket_set:
+            income_by[k] += float(amt or 0)
+
+    # Despesas: lançadas por vencimento; pagas por data de pagamento (ou venc.)
+    for due, paidon, amt, status in db.execute(
+        select(Expense.due_on, Expense.paid_on, Expense.amount, Expense.status)
+    ):
+        if status == "cancelado":
+            continue
+        if due is not None:
+            k = ym(due)
+            if k in bucket_set:
+                launch_by[k] += float(amt or 0)
+        if status == "pago":
+            ref = paidon or due
+            if ref is not None:
+                k = ym(ref)
+                if k in bucket_set:
+                    paid_by[k] += float(amt or 0)
+
+    # Pagamentos de dívida por data
+    for d, amt in db.execute(select(Payment.paid_on, Payment.amount)):
+        if d is None:
+            continue
+        k = ym(d)
+        if k in bucket_set:
+            paym_by[k] += float(amt or 0)
+
+    series = []
+    running = 0.0
+    for b in buckets:
+        inc = round(income_by[b], 2)
+        paid = round(paid_by[b], 2)
+        paym = round(paym_by[b], 2)
+        launched = round(launch_by[b], 2)
+        out = round(paid + paym, 2)
+        net = round(inc - out, 2)
+        running = round(running + net, 2)
+        series.append({
+            "month": b,
+            "income": inc,
+            "paid": paid,
+            "payments": paym,
+            "launched": launched,
+            "outflow": out,
+            "net": net,
+            "cumulative": running,
+        })
+
+    # Indicadores de saúde financeira (sobre os totais do período)
+    tot_income = round(sum(s["income"] for s in series), 2)
+    tot_out    = round(sum(s["outflow"] for s in series), 2)
+    tot_paid   = round(sum(s["paid"] for s in series), 2)
+    tot_paym   = round(sum(s["payments"] for s in series), 2)
+    savings    = round(tot_income - tot_out, 2)
+    savings_rate = round((savings / tot_income * 100), 1) if tot_income else 0.0
+
+    # comprometimento mensal fixo atual x renda média
+    monthly_commitment = float(db.scalar(
+        select(func.coalesce(func.sum(Debt.monthly_installment), 0)).where(
+            Debt.status != "quitada"
+        )
+    ) or 0)
+    months_with_income = [s["income"] for s in series if s["income"] > 0]
+    avg_income = round(sum(months_with_income) / len(months_with_income), 2) if months_with_income else 0.0
+    commitment_rate = round((monthly_commitment / avg_income * 100), 1) if avg_income else 0.0
+
+    return {
+        "months": months,
+        "series": series,
+        "totals": {
+            "income": tot_income,
+            "outflow": tot_out,
+            "paid_expenses": tot_paid,
+            "debt_payments": tot_paym,
+            "savings": savings,
+            "savings_rate": savings_rate,
+            "avg_income": avg_income,
+            "monthly_commitment": monthly_commitment,
+            "commitment_rate": commitment_rate,
+        },
     }
 
 

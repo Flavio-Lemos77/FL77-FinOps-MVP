@@ -247,6 +247,9 @@ body.role-viewer .viewer-banner{display:flex;align-items:center;gap:8px}
       <button class="nav-btn active" onclick="showPage('dashboard')">
         <span class="icon">▦</span> Visão geral
       </button>
+      <button class="nav-btn" onclick="showPage('bi')">
+        <span class="icon">📊</span> Dashboard BI
+      </button>
       <button class="nav-btn" onclick="showPage('receitas')">
         <span class="icon">↗</span> Receitas
       </button>
@@ -663,7 +666,7 @@ async function refreshCache() {
 function showPage(page) {
   _currentPage = page;
   $$('.nav-btn').forEach(b => b.classList.remove('active'));
-  const idx = {dashboard:0,receitas:1,despesas:2,dividas:3,pagamentos:4};
+  const idx = {dashboard:0,bi:1,receitas:2,despesas:3,dividas:4,pagamentos:5};
   const btns = $$('.nav-btn');
   if (btns[idx[page]]) btns[idx[page]].classList.add('active');
   renderPage(page);
@@ -674,6 +677,7 @@ async function renderPage(page) {
   main.innerHTML = '<div class="empty"><big>⌛</big>Carregando…</div>';
   try {
     if (page === 'dashboard')   await pageDashboard(main);
+    else if (page === 'bi')         await pageBI(main);
     else if (page === 'receitas')   await pageReceitas(main);
     else if (page === 'despesas')   await pageDespesas(main);
     else if (page === 'dividas')    await pageDividas(main);
@@ -686,16 +690,13 @@ async function renderPage(page) {
 /* ── DASHBOARD ───────────────────────────────────────────────────── */
 async function pageDashboard(main) {
   const d = await api('GET','dashboard');
-  const monthlyCommit = _debts
-    .filter(x => x.status !== 'quitada' && x.monthly_installment)
-    .reduce((s,x) => s + (+x.monthly_installment||0), 0);
 
   const metrics = [
-    {cls:'m-income',  label:'Receitas',              val: d.income},
-    {cls:'m-expense', label:'Despesas',              val: d.expenses},
-    {cls:'m-commit',  label:'Comprometimento mensal', val: monthlyCommit},
-    {cls:'m-balance', label:'Saldo disponível',       val: d.available},
-    {cls:'m-debt',    label:'Dívidas abertas',         val: d.debt_total},
+    {cls:'m-income',  label:'Receitas',          val: d.income,          hint:'total que entrou'},
+    {cls:'m-expense', label:'Despesas pagas',    val: d.paid_expenses,   hint:'dinheiro que saiu'},
+    {cls:'m-balance', label:'Saldo disponível',  val: d.available,       hint:'receitas − pagas − pgtos'},
+    {cls:'m-commit',  label:'A vencer',          val: d.pending_expenses,hint:'pendentes (não abate)'},
+    {cls:'m-debt',    label:'Dívidas abertas',   val: d.debt_total,      hint:'saldo devedor'},
   ];
 
   const maxCat = Math.max(...(d.expenses_by_category.map(x=>+x.amount)),1);
@@ -748,7 +749,7 @@ async function pageDashboard(main) {
     <div class="metric-card ${m.cls}">
       <label>${m.label}</label>
       <strong>${br(m.val)}</strong>
-      <span>Consolidado local</span>
+      <span>${m.hint}</span>
     </div>`).join('')}
   </div>
 
@@ -778,6 +779,155 @@ async function pageDashboard(main) {
         <button class="btn admin-only" onclick="openSourceForm()">+ Fonte de renda</button>
         <button class="btn success admin-only" onclick="exportExcel()">⬇ Excel</button>
         <span class="viewer-banner" style="margin:0">👁 Somente leitura</span>
+      </div>
+    </div>
+  </div>`;
+}
+
+/* ══ DASHBOARD BI ══════════════════════════════════════════════════ */
+function brShort(v){
+  v = +v || 0;
+  if (Math.abs(v) >= 1000) return 'R$ ' + (v/1000).toFixed(1).replace('.',',') + 'k';
+  return br(v);
+}
+
+async function pageBI(main) {
+  const [a, d] = await Promise.all([
+    api('GET','analytics?months=12'),
+    api('GET','dashboard'),
+  ]);
+  const S = a.series, T = a.totals;
+
+  // nome curto do mês (YYYY-MM -> mmm/aa)
+  const MES = ['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
+  const lbl = m => { const [y,mm]=m.split('-'); return MES[+mm-1]+'/'+y.slice(2); };
+
+  /* ---- KPIs ---- */
+  const kpis = [
+    {cls:'m-income',  label:'Receitas (12m)',       val: T.income},
+    {cls:'m-expense', label:'Saídas (12m)',         val: T.outflow},
+    {cls:'m-balance', label:'Economia (12m)',       val: T.savings,
+       extra: `${T.savings_rate}% da renda`},
+    {cls:'m-commit',  label:'Comprometimento',      val: T.monthly_commitment,
+       extra: `${T.commitment_rate}% da renda média`},
+  ];
+
+  /* ---- Gráfico de barras: receitas vs saídas por mês ---- */
+  const maxBar = Math.max(1, ...S.map(s=>Math.max(s.income, s.outflow)));
+  const bw = 100 / S.length;        // largura de cada grupo em %
+  const barsSvg = S.map((s,i) => {
+    const x = i * bw;
+    const hi = s.income/maxBar*100, ho = s.outflow/maxBar*100;
+    return `
+      <g>
+        <rect x="${x+bw*0.18}%" y="${100-hi}%" width="${bw*0.28}%" height="${hi}%"
+              fill="#1f9e73" rx="2"><title>Receitas ${lbl(s.month)}: ${br(s.income)}</title></rect>
+        <rect x="${x+bw*0.52}%" y="${100-ho}%" width="${bw*0.28}%" height="${ho}%"
+              fill="#e0455c" rx="2"><title>Saídas ${lbl(s.month)}: ${br(s.outflow)}</title></rect>
+      </g>`;
+  }).join('');
+  const barLabels = S.map((s,i)=>`<div style="flex:1;text-align:center">${lbl(s.month)}</div>`).join('');
+
+  /* ---- Linha: saldo acumulado ---- */
+  const cumVals = S.map(s=>s.cumulative);
+  const cmin = Math.min(0, ...cumVals), cmax = Math.max(1, ...cumVals);
+  const range = (cmax - cmin) || 1;
+  const pts = S.map((s,i) => {
+    const x = (S.length===1?0:i/(S.length-1))*100;
+    const y = 100 - ((s.cumulative - cmin)/range*100);
+    return `${x},${y}`;
+  }).join(' ');
+  const zeroY = 100 - ((0 - cmin)/range*100);
+  const lineColor = cumVals[cumVals.length-1] >= 0 ? '#5ba8d4' : '#e0455c';
+
+  /* ---- Despesas por categoria (pizza em conic-gradient) ---- */
+  const catData = d.expenses_by_category.slice(0,6);
+  const catTotal = catData.reduce((s,x)=>s+(+x.amount||0),0) || 1;
+  const PIE = ['#5ba8d4','#1f9e73','#f0b075','#9575cd','#e0455c','#64deb8'];
+  let acc = 0;
+  const stops = catData.map((x,i)=>{
+    const start = acc/catTotal*360;
+    acc += (+x.amount||0);
+    const end = acc/catTotal*360;
+    return `${PIE[i]} ${start}deg ${end}deg`;
+  }).join(',');
+  const legend = catData.map((x,i)=>`
+    <div style="display:flex;align-items:center;gap:8px;margin:5px 0;font-size:12px">
+      <span style="width:11px;height:11px;border-radius:3px;background:${PIE[i]};flex-shrink:0"></span>
+      <span style="flex:1;color:#b9cbe0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${x.category}</span>
+      <b>${br(x.amount)}</b>
+      <span style="color:#7a90a8;width:40px;text-align:right">${Math.round((+x.amount||0)/catTotal*100)}%</span>
+    </div>`).join('') || '<div class="empty">Sem despesas.</div>';
+
+  /* ---- Saúde financeira (avaliação) ---- */
+  const sr = T.savings_rate, cr = T.commitment_rate;
+  const health =
+    sr >= 20 && cr <= 30 ? {t:'Saudável', c:'#64deb8', m:'Boa folga e endividamento sob controle.'} :
+    sr >= 0  && cr <= 50 ? {t:'Atenção',  c:'#f0b075', m:'Dá para melhorar a sobra mensal e reduzir compromissos.'} :
+                           {t:'Crítico',  c:'#e0455c', m:'Gastos e dívidas pressionando o orçamento. Reveja prioridades.'};
+
+  main.innerHTML = `
+  <div class="page-head">
+    <div><div class="eyebrow">INTELIGÊNCIA FINANCEIRA</div><h1>Dashboard BI</h1></div>
+    <div class="head-actions">
+      <button class="btn success admin-only" onclick="exportExcel()">⬇ Exportar Excel</button>
+    </div>
+  </div>
+
+  <div class="metrics" style="grid-template-columns:repeat(4,1fr)">
+    ${kpis.map(k=>`
+    <div class="metric-card ${k.cls}">
+      <label>${k.label}</label>
+      <strong>${br(k.val)}</strong>
+      <span>${k.extra||'últimos 12 meses'}</span>
+    </div>`).join('')}
+  </div>
+
+  <div class="panels" style="grid-template-columns:1.5fr 1fr">
+    <div class="panel">
+      <div class="panel-title">Receitas vs Saídas <small>por mês · verde=entrou · vermelho=saiu</small></div>
+      <svg viewBox="0 0 100 100" preserveAspectRatio="none" style="width:100%;height:220px;border-bottom:1px solid #25435e">
+        ${barsSvg}
+      </svg>
+      <div style="display:flex;font-size:9px;color:#a7bdd2;margin-top:4px">${barLabels}</div>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Despesas por categoria <small>top 6</small></div>
+      <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap">
+        <div style="width:120px;height:120px;border-radius:50%;flex-shrink:0;
+             background:conic-gradient(${stops||'#1a2d3f 0deg 360deg'})"></div>
+        <div style="flex:1;min-width:160px">${legend}</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panels" style="grid-template-columns:1.5fr 1fr;margin-top:14px">
+    <div class="panel">
+      <div class="panel-title">Saldo acumulado <small>evolução do caixa</small></div>
+      <svg viewBox="0 0 100 100" preserveAspectRatio="none" style="width:100%;height:200px">
+        <line x1="0" y1="${zeroY}" x2="100" y2="${zeroY}" stroke="#2b4866" stroke-width="0.4" stroke-dasharray="2"/>
+        <polyline points="${pts}" fill="none" stroke="${lineColor}" stroke-width="1.2"
+                  vector-effect="non-scaling-stroke"/>
+        ${S.map((s,i)=>{const x=(S.length===1?0:i/(S.length-1))*100;const y=100-((s.cumulative-cmin)/range*100);
+          return `<circle cx="${x}" cy="${y}" r="1.1" fill="${lineColor}"><title>${lbl(s.month)}: ${br(s.cumulative)}</title></circle>`;}).join('')}
+      </svg>
+      <div style="display:flex;font-size:9px;color:#a7bdd2;margin-top:4px">${barLabels}</div>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Saúde financeira</div>
+      <div style="text-align:center;padding:10px 0">
+        <div style="font-size:28px;font-weight:800;color:${health.c}">${health.t}</div>
+        <div style="color:#9db2c9;font-size:12px;margin-top:6px">${health.m}</div>
+      </div>
+      <div class="cat-row"><span>Taxa de economia</span>
+        <div class="track"><div class="fill" style="width:${Math.max(0,Math.min(100,sr))}%;background:#1f9e73"></div></div>
+        <b>${sr}%</b></div>
+      <div class="cat-row"><span>Comprometimento</span>
+        <div class="track"><div class="fill" style="width:${Math.max(0,Math.min(100,cr))}%;background:${cr>50?'#e0455c':cr>30?'#f0b075':'#64deb8'}"></div></div>
+        <b>${cr}%</b></div>
+      <div style="font-size:11px;color:#7a90a8;margin-top:10px">
+        Renda média mensal: <b style="color:#b9cbe0">${br(T.avg_income)}</b><br>
+        Economia no período: <b style="color:${T.savings>=0?'#64deb8':'#e0455c'}">${br(T.savings)}</b>
       </div>
     </div>
   </div>`;
