@@ -498,9 +498,23 @@ def expenses(db: Session = Depends(get_db)):
 
 @app.post("/api/expenses", response_model=ExpenseOut, status_code=201)
 def add_expense(data: ExpenseIn, db: Session = Depends(get_db)):
+    # Despesa simples (sem parcelamento)
     if not data.recurring or data.installments_total == 1:
         return create(db, Expense, data)
+
+    # ── Despesa parcelada ────────────────────────────────────────────────
+    # Gera uma linha por parcela, mês a mês a partir de due_on.
+    #
+    # Regra de status inteligente (previsão automática):
+    #   - Parcela com vencimento <= hoje  -> usa o status informado no form
+    #     (ex.: "pago"). Serve para lançar compras retroativas já quitadas.
+    #   - Parcela com vencimento > hoje   -> entra como "pendente" (em aberto),
+    #     compondo a previsão de gastos dos próximos meses.
+    # Assim, uma compra retroativa parcelada já projeta automaticamente as
+    # parcelas futuras como contas a pagar.
+    hoje = date.today()
     rows = []
+    first = None
     for number in range(1, min(data.installments_total, 600) + 1):
         month_index = data.due_on.month - 1 + number - 1
         year = data.due_on.year + month_index // 12
@@ -509,10 +523,27 @@ def add_expense(data: ExpenseIn, db: Session = Depends(get_db)):
             year, month, min(data.due_on.day, calendar.monthrange(year, month)[1])
         )
         payload = data.model_dump()
-        payload.update(due_on=due_on, installment_number=number)
-        rows.append(Expense(**payload))
+
+        # Define o status conforme a data da parcela
+        if due_on <= hoje:
+            status = data.status  # respeita o que o usuário escolheu (pago/pendente)
+            paid_on = data.paid_on if status == "pago" else None
+        else:
+            status = "pendente"   # parcela futura entra sempre em aberto
+            paid_on = None
+
+        payload.update(
+            due_on=due_on,
+            installment_number=number,
+            status=status,
+            paid_on=paid_on,
+        )
+        row = Expense(**payload)
+        rows.append(row)
+
     db.add_all(rows)
     db.commit()
+    # Retorna a primeira parcela (ou a parcela "atual" se existir)
     db.refresh(rows[0])
     return rows[0]
 

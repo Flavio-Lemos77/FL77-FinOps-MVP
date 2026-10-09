@@ -482,6 +482,12 @@ function buildForm(kind) {
     '<div class="form-row">' +
       fld('installments_total','Nº de parcelas','number','min="1" max="600" value="1"',false) +
       fld('review_before_days','Revisar quantos dias antes','number','min="0" max="30" value="5"',false) +
+    '</div>' +
+    '<div style="background:#0e2236;border:1px solid #2b4866;border-radius:8px;' +
+    'padding:10px 12px;font-size:11px;color:#8fa6c0;margin-bottom:4px">' +
+    '💡 <b style="color:#7fb0e0">Previsão automática:</b> ao parcelar com data ' +
+    'retroativa, as parcelas até hoje seguem a situação escolhida e as parcelas ' +
+    'futuras entram automaticamente como <b>pendentes</b> nos próximos meses.' +
     '</div>';
   }
 
