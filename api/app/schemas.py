@@ -41,6 +41,7 @@ class ExpenseIn(BaseModel):
     installments_total: int = Field(default=1, ge=1, le=600)
     installment_number: int = Field(default=1, ge=1)
     review_before_days: int = Field(default=5, ge=0, le=30)
+    linked_debt_id: int | None = None
 class ExpenseOut(ExpenseIn, ORM): id: int; created_at: datetime
 
 class DebtIn(BaseModel):

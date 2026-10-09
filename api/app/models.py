@@ -44,6 +44,9 @@ class Expense(AuditMixin, Base):
     installments_total: Mapped[int] = mapped_column(default=1)
     installment_number: Mapped[int] = mapped_column(default=1)
     review_before_days: Mapped[int] = mapped_column(default=5)
+    # Quando a despesa representa o pagamento da parcela de uma dívida,
+    # guarda o id da dívida. Ao ser marcada como paga, abate o saldo devedor.
+    linked_debt_id: Mapped[int | None] = mapped_column(ForeignKey("debts.id"), nullable=True)
 
 class Debt(AuditMixin, Base):
     __tablename__ = "debts"

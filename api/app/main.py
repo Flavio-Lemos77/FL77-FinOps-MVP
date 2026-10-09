@@ -192,6 +192,7 @@ def _initialize_database() -> None:
                 ("installments_total", "INTEGER DEFAULT 1"),
                 ("installment_number", "INTEGER DEFAULT 1"),
                 ("review_before_days", "INTEGER DEFAULT 5"),
+                ("linked_debt_id", "INTEGER"),
             ]:
                 if col_name not in expense_cols:
                     conn.exec_driver_sql(
@@ -496,11 +497,30 @@ def delete_category(item_id: int, db: Session = Depends(get_db)):
 def expenses(db: Session = Depends(get_db)):
     return list_rows(db, Expense)
 
+def _abater_divida(db: Session, debt_id: int | None, valor) -> None:
+    """Reduz o saldo devedor de uma dívida pelo valor pago na despesa.
+    Quita a dívida quando o saldo chega a zero. Usado quando uma despesa
+    vinculada a uma dívida é marcada como paga."""
+    if not debt_id:
+        return
+    debt = db.get(Debt, debt_id)
+    if not debt:
+        return
+    debt.current_balance = max(Decimal("0"), debt.current_balance - Decimal(str(valor)))
+    if debt.current_balance == 0:
+        debt.status = "quitada"
+
+
 @app.post("/api/expenses", response_model=ExpenseOut, status_code=201)
 def add_expense(data: ExpenseIn, db: Session = Depends(get_db)):
     # Despesa simples (sem parcelamento)
     if not data.recurring or data.installments_total == 1:
-        return create(db, Expense, data)
+        row = create(db, Expense, data)
+        # Se a despesa já nasce paga e está vinculada a uma dívida, abate o saldo
+        if data.linked_debt_id and data.status == "pago":
+            _abater_divida(db, data.linked_debt_id, data.amount)
+            db.commit()
+        return row
 
     # ── Despesa parcelada ────────────────────────────────────────────────
     # Gera uma linha por parcela, mês a mês a partir de due_on.
@@ -543,13 +563,27 @@ def add_expense(data: ExpenseIn, db: Session = Depends(get_db)):
 
     db.add_all(rows)
     db.commit()
-    # Retorna a primeira parcela (ou a parcela "atual" se existir)
+    # Abate a dívida para cada parcela já paga (ex.: parcelas retroativas quitadas)
+    if data.linked_debt_id:
+        pagas = sum((r.amount for r in rows if r.status == "pago"), Decimal("0"))
+        if pagas > 0:
+            _abater_divida(db, data.linked_debt_id, pagas)
+            db.commit()
     db.refresh(rows[0])
     return rows[0]
 
 @app.put("/api/expenses/{item_id}", response_model=ExpenseOut)
 def edit_expense(item_id: int, data: ExpenseIn, db: Session = Depends(get_db)):
-    return update(db, Expense, item_id, data)
+    # Captura o estado anterior para detectar a transição pendente -> pago
+    atual = one(db, Expense, item_id)
+    era_pago = atual.status == "pago"
+    row = update(db, Expense, item_id, data)
+    # Só abate quando a despesa passa a ser paga agora (evita dupla contagem)
+    if data.linked_debt_id and data.status == "pago" and not era_pago:
+        _abater_divida(db, data.linked_debt_id, data.amount)
+        db.commit()
+        db.refresh(row)
+    return row
 
 @app.delete("/api/expenses/{item_id}", status_code=204)
 def delete_expense(item_id: int, db: Session = Depends(get_db)):

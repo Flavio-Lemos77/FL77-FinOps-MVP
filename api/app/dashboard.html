@@ -380,6 +380,22 @@ function catOptions(includeEmpty=false) {
   return e + _categories.map(c=>`<option value="${c.name}">${c.name}</option>`).join('');
 }
 
+/* Opções de categoria para despesa: categorias normais + grupo de dívidas
+   ativas. Dívidas usam value="debt:ID" para o submit identificar o vínculo. */
+function expenseCatOptions() {
+  let html = '<option value="" disabled selected>Selecione…</option>';
+  html += '<optgroup label="Categorias">' +
+    _categories.map(c=>`<option value="${c.name}">${c.name}</option>`).join('') +
+    '</optgroup>';
+  const ativas = _debts.filter(d => d.status !== 'quitada');
+  if (ativas.length) {
+    html += '<optgroup label="Pagar parcela de dívida">' +
+      ativas.map(d=>`<option value="debt:${d.id}">💳 ${d.creditor} — ${d.debt_type||'Dívida'}</option>`).join('') +
+      '</optgroup>';
+  }
+  return html;
+}
+
 /* ── simulação de financiamento (tabela Price) ────────────────────── */
 function simPanel() {
   return `
@@ -476,7 +492,7 @@ function buildForm(kind) {
       fld('amount','Valor (R$)','number','step="0.01" min="0.01"') +
     '</div><div class="form-row">' +
       fld('due_on','Data de vencimento','date',`value="${T}"`) +
-      sel('category','Categoria',catOptions(true)) +
+      sel('category','Categoria',expenseCatOptions()) +
     '</div><div class="form-row">' +
       sel('status','Situação','<option value="pendente">Pendente</option><option value="pago">Pago</option>') +
       fld('paid_on','Pago em','date','',false) +
@@ -582,11 +598,20 @@ $('#modalForm').addEventListener('submit', async function(e) {
     }
   }
 
-  /* checkbox recurring */
+  /* checkbox recurring + vínculo com dívida */
   if (currentForm === 'expenses') {
     data.recurring = !!fd.get('recurring');
     if (!data.installments_total) data.installments_total = 1;
     if (!data.review_before_days && data.review_before_days !== 0) data.review_before_days = 5;
+    // Categoria "debt:ID" significa pagamento de parcela de uma dívida
+    data.linked_debt_id = null;
+    if (typeof data.category === 'string' && data.category.startsWith('debt:')) {
+      const id = parseInt(data.category.slice(5), 10);
+      const debt = _debts.find(x => x.id === id);
+      data.linked_debt_id = id;
+      // guarda uma categoria legível no lugar do "debt:ID"
+      data.category = debt ? `Dívida: ${debt.creditor}` : 'Dívida';
+    }
   }
 
   /* limpar zeros opcionais */
