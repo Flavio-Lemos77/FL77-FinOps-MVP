@@ -205,6 +205,8 @@ def _initialize_database() -> None:
             for col_name, definition in [
                 ("monthly_installment", "NUMERIC(12,2)"),
                 ("debt_type", "VARCHAR(60) DEFAULT 'Outros'"),
+                ("installments_total", "INTEGER"),
+                ("total_with_interest", "NUMERIC(12,2)"),
             ]:
                 if col_name not in debt_cols:
                     conn.exec_driver_sql(

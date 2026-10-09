@@ -49,6 +49,8 @@ class DebtIn(BaseModel):
     original_amount: Decimal = Field(gt=0)
     current_balance: Decimal = Field(ge=0)
     monthly_installment: Decimal | None = Field(default=None, ge=0)
+    installments_total: int | None = Field(default=None, ge=1, le=600)
+    total_with_interest: Decimal | None = Field(default=None, ge=0)
     interest_rate: Decimal | None = Field(default=None, ge=0)
     due_day: int | None = Field(default=None, ge=1, le=31)
     status: str = "ativa"

@@ -52,6 +52,8 @@ class Debt(AuditMixin, Base):
     original_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
     current_balance: Mapped[Decimal] = mapped_column(Numeric(12, 2))
     monthly_installment: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
+    installments_total: Mapped[int | None] = mapped_column(nullable=True)
+    total_with_interest: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
     interest_rate: Mapped[Decimal | None] = mapped_column(Numeric(6, 3), nullable=True)
     due_day: Mapped[int | None] = mapped_column(nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="ativa")

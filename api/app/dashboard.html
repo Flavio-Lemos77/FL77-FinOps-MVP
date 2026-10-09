@@ -377,6 +377,75 @@ function catOptions(includeEmpty=false) {
   return e + _categories.map(c=>`<option value="${c.name}">${c.name}</option>`).join('');
 }
 
+/* ── simulação de financiamento (tabela Price) ────────────────────── */
+function simPanel() {
+  return `
+  <div id="simPanel" style="display:none;background:#0e2236;border:1px solid #2b4866;
+       border-radius:10px;padding:14px;margin-bottom:14px">
+    <div style="font-size:11px;color:#7fb0e0;font-weight:700;letter-spacing:.6px;
+         text-transform:uppercase;margin-bottom:10px">
+      Simulação do financiamento
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;text-align:center">
+      <div><div style="font-size:10px;color:#9eb4cb">PRESTAÇÃO ESTIMADA</div>
+           <div id="simPmt" style="font-size:16px;font-weight:800;color:#5ba8d4">—</div></div>
+      <div><div style="font-size:10px;color:#9eb4cb">TOTAL A PAGAR</div>
+           <div id="simTotal" style="font-size:16px;font-weight:800;color:#ffad80">—</div></div>
+      <div><div style="font-size:10px;color:#9eb4cb">TOTAL DE JUROS</div>
+           <div id="simInterest" style="font-size:16px;font-weight:800;color:#f97066">—</div></div>
+    </div>
+    <div id="simNote" style="font-size:11px;color:#8fa6c0;margin-top:10px"></div>
+    <button type="button" class="btn sm" style="margin-top:10px"
+            onclick="applySim()">Usar valores calculados</button>
+  </div>`;
+}
+
+// guarda o último cálculo para o botão "usar valores"
+let _lastSim = null;
+
+function simulateDebt() {
+  const pv = parseFloat(($('#f_original_amount')||{}).value) || 0;
+  const i  = (parseFloat(($('#f_interest_rate')||{}).value) || 0) / 100; // % a.m. -> fração
+  const n  = parseInt(($('#f_installments_total')||{}).value) || 0;
+  const panel = $('#simPanel');
+  if (!panel) return;
+
+  if (pv <= 0 || n <= 0) { panel.style.display = 'none'; _lastSim = null; return; }
+
+  let pmt, total, note;
+  if (i > 0) {
+    // Tabela Price: PMT = PV * i / (1 - (1+i)^-n)
+    pmt = pv * i / (1 - Math.pow(1 + i, -n));
+    note = `Cálculo pela Tabela Price com ${n}x e juros de ${(i*100).toFixed(2)}% ao mês.`;
+  } else {
+    // Sem juros: divide igualmente
+    pmt = pv / n;
+    note = `Sem juros: ${n} parcelas iguais de ${br(pmt)}.`;
+  }
+  total = pmt * n;
+  const interest = total - pv;
+
+  $('#simPmt').textContent      = br(pmt);
+  $('#simTotal').textContent    = br(total);
+  $('#simInterest').textContent = br(interest);
+  $('#simNote').textContent     = note;
+  panel.style.display = 'block';
+  _lastSim = { pmt: +pmt.toFixed(2), total: +total.toFixed(2) };
+}
+
+function applySim() {
+  if (!_lastSim) return;
+  const mi = $('#f_monthly_installment');
+  const cb = $('#f_current_balance');
+  const tw = $('#f_total_with_interest');
+  if (mi) mi.value = _lastSim.pmt;
+  if (tw) tw.value = _lastSim.total;
+  // se o saldo devedor estiver vazio, assume o total a pagar como saldo inicial
+  if (cb && !cb.value) cb.value = _lastSim.total;
+  showNotice($('#modalNotice'),
+    `Prestação ${br(_lastSim.pmt)} e total ${br(_lastSim.total)} aplicados.`, 'ok');
+}
+
 /* ── formulários ─────────────────────────────────────────────────── */
 function buildForm(kind) {
   currentForm = kind;
@@ -425,15 +494,21 @@ function buildForm(kind) {
         '<option>Acordo / Renegociação</option><option>Consignado</option>' +
         '<option>Cheque especial</option><option>Outros</option>') +
     '</div><div class="form-row">' +
-      fld('original_amount','Valor total financiado (R$)','number','step="0.01" min="0.01"') +
+      fld('original_amount','Valor financiado (R$)','number','step="0.01" min="0.01" oninput="simulateDebt()"') +
+      fld('interest_rate','Juros % ao mês','number','step="0.001" min="0" oninput="simulateDebt()"',false) +
+    '</div><div class="form-row">' +
+      fld('installments_total','Quantidade de parcelas','number','min="1" max="600" oninput="simulateDebt()"',false) +
       fld('monthly_installment','Prestação mensal (R$)','number','step="0.01" min="0.01"',false) +
-    '</div><div class="form-row">' +
+    '</div>' +
+      simPanel() +
+    '<div class="form-row">' +
       fld('current_balance','Saldo devedor atual (R$)','number','step="0.01" min="0"') +
-      fld('interest_rate','Juros % ao mês','number','step="0.001" min="0"',false) +
-    '</div><div class="form-row">' +
       fld('due_day','Dia de vencimento','number','min="1" max="31"',false) +
+    '</div><div class="form-row">' +
       sel('status','Status','<option value="ativa">Ativa</option><option value="negociando">Negociando</option><option value="suspensa">Suspensa</option><option value="quitada">Quitada</option>') +
-    '</div>';
+      '<div class="fld"></div>' +
+    '</div>' +
+      '<input type="hidden" name="total_with_interest" id="f_total_with_interest">';
   }
 
   else if (kind === 'payments') {
@@ -480,11 +555,13 @@ $('#modalForm').addEventListener('submit', async function(e) {
     if (v === '' || v === null) {
       /* campos opcionais ficam como null */
       const optionals = ['source_id','debt_id','agreement_id','paid_on','notes',
-                         'interest_rate','due_day','monthly_installment'];
+                         'interest_rate','due_day','monthly_installment',
+                         'installments_total','total_with_interest'];
       if (optionals.includes(k)) { data[k] = null; continue; }
     }
     const numerics = ['amount','original_amount','current_balance','interest_rate',
                       'monthly_installment','monthly_salary','installments_total',
+                      'total_with_interest',
                       'installment_number','review_before_days','due_day'];
     const ints = ['source_id','debt_id','agreement_id','installments_total',
                   'installment_number','review_before_days','due_day'];
@@ -550,6 +627,8 @@ async function openEdit(kind, id) {
     el.value = v;
   }
   $('#submitBtn').textContent = 'Atualizar';
+  // recalcula a simulação ao editar uma dívida
+  if (kind === 'debts' && typeof simulateDebt === 'function') simulateDebt();
 }
 
 /* ── excluir ─────────────────────────────────────────────────────── */
@@ -879,6 +958,11 @@ async function pageDividas(main) {
             </div>
             ${x.monthly_installment?`<div style="color:#ffb17c;font-size:12px;margin-top:4px">
               💳 Prestação mensal: <b>${br(x.monthly_installment)}</b>
+              ${x.installments_total?` em <b>${x.installments_total}x</b>`:''}
+            </div>`:''}
+            ${x.total_with_interest?`<div style="color:#9db2c9;font-size:12px;margin-top:3px">
+              📊 Total com juros: <b style="color:#f0b075">${br(x.total_with_interest)}</b>
+              ${x.original_amount?` &nbsp;·&nbsp; juros: ${br(x.total_with_interest - x.original_amount)}`:''}
             </div>`:''}
             <div class="debt-progress">
               <div style="font-size:11px;color:#64deb8">${pct}% quitado</div>
