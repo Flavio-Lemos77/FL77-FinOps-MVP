@@ -1,11 +1,11 @@
 from contextlib import asynccontextmanager
 from datetime import date, timedelta
-import calendar
+import calendar, io
 from collections import defaultdict
 from decimal import Decimal
 import base64, hashlib, hmac, os, secrets, time
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -531,6 +531,127 @@ def dashboard(db: Session = Depends(get_db)):
             {"category": row[0], "amount": row[1]} for row in by_category
         ],
     }
+
+
+# ---------------------------------------------------------------------------
+# Exportação Excel
+# ---------------------------------------------------------------------------
+
+@app.get("/api/export")
+def export_excel(db: Session = Depends(get_db)):
+    """Gera um arquivo .xlsx com todas as tabelas em abas separadas."""
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+        from openpyxl.utils import get_column_letter
+    except ImportError:
+        raise HTTPException(500, "openpyxl não instalado. Execute: pip install openpyxl")
+
+    wb = Workbook()
+    wb.remove(wb.active)  # remove aba padrão vazia
+
+    HDR_FILL  = PatternFill("solid", fgColor="0E2A47")
+    HDR_FONT  = Font(color="FFFFFF", bold=True, size=11)
+    ALT_FILL  = PatternFill("solid", fgColor="E7F0FA")
+    BORDER    = Border(
+        bottom=Side(style="thin", color="C7D6EA"),
+        right =Side(style="thin", color="C7D6EA"),
+    )
+
+    def make_sheet(title, headers, rows):
+        ws = wb.create_sheet(title)
+        # cabeçalho
+        for col, h in enumerate(headers, 1):
+            cell = ws.cell(row=1, column=col, value=h)
+            cell.font = HDR_FONT
+            cell.fill = HDR_FILL
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+            cell.border = BORDER
+        ws.row_dimensions[1].height = 20
+        # dados
+        for r, row in enumerate(rows, 2):
+            fill = ALT_FILL if r % 2 == 0 else PatternFill()
+            for col, val in enumerate(row, 1):
+                cell = ws.cell(row=r, column=col, value=val)
+                cell.fill = fill
+                cell.border = BORDER
+                cell.alignment = Alignment(vertical="center")
+        # auto-largura
+        for col in ws.columns:
+            max_len = max((len(str(c.value or "")) for c in col), default=8)
+            ws.column_dimensions[get_column_letter(col[0].column)].width = min(max_len + 4, 40)
+        return ws
+
+    # ── Receitas ────────────────────────────────────────────────────────
+    incomes_rows = db.scalars(select(Income).order_by(Income.received_on.desc())).all()
+    make_sheet("Receitas",
+        ["ID", "Descrição", "Valor (R$)", "Data", "Categoria", "Tipo", "Recorrente", "Criado em"],
+        [(x.id, x.description, float(x.amount), str(x.received_on), x.category,
+          x.income_type, "Sim" if x.recurring else "Não", str(x.created_at)[:19])
+         for x in incomes_rows])
+
+    # ── Despesas ─────────────────────────────────────────────────────────
+    expense_rows = db.scalars(select(Expense).order_by(Expense.due_on.desc())).all()
+    make_sheet("Despesas",
+        ["ID", "Descrição", "Valor (R$)", "Vencimento", "Pago em", "Categoria",
+         "Status", "Parcela", "Total Parcelas", "Recorrente", "Criado em"],
+        [(x.id, x.description, float(x.amount), str(x.due_on),
+          str(x.paid_on) if x.paid_on else "", x.category, x.status,
+          x.installment_number, x.installments_total,
+          "Sim" if x.recurring else "Não", str(x.created_at)[:19])
+         for x in expense_rows])
+
+    # ── Dívidas ──────────────────────────────────────────────────────────
+    debt_rows = db.scalars(select(Debt).order_by(Debt.id.desc())).all()
+    make_sheet("Dívidas",
+        ["ID", "Credor", "Tipo", "Valor Original (R$)", "Saldo Devedor (R$)",
+         "Prestação Mensal (R$)", "Juros % a.m.", "Dia Vencto", "Status", "Criado em"],
+        [(x.id, x.creditor, x.debt_type or "Outros", float(x.original_amount),
+          float(x.current_balance),
+          float(x.monthly_installment) if x.monthly_installment else "",
+          float(x.interest_rate) if x.interest_rate else "",
+          x.due_day or "", x.status, str(x.created_at)[:19])
+         for x in debt_rows])
+
+    # ── Pagamentos ───────────────────────────────────────────────────────
+    payment_rows = db.scalars(select(Payment).order_by(Payment.paid_on.desc())).all()
+    make_sheet("Pagamentos",
+        ["ID", "Dívida ID", "Acordo ID", "Valor (R$)", "Data Pagamento", "Método", "Observações", "Criado em"],
+        [(x.id, x.debt_id or "", x.agreement_id or "", float(x.amount),
+          str(x.paid_on), x.method, x.notes or "", str(x.created_at)[:19])
+         for x in payment_rows])
+
+    # ── Resumo ───────────────────────────────────────────────────────────
+    ws_r = wb.create_sheet("Resumo", 0)
+    total_income  = sum(float(x.amount) for x in incomes_rows)
+    total_expense = sum(float(x.amount) for x in expense_rows if x.status != "cancelado")
+    total_debt    = sum(float(x.current_balance) for x in debt_rows if x.status != "quitada")
+    monthly_commit= sum(float(x.monthly_installment) for x in debt_rows
+                        if x.status != "quitada" and x.monthly_installment)
+    resumo = [
+        ("Receitas totais",          total_income),
+        ("Despesas totais",          total_expense),
+        ("Saldo disponível",         total_income - total_expense),
+        ("Dívidas abertas",          total_debt),
+        ("Comprometimento mensal",   monthly_commit),
+        ("Gerado em", str(date.today())),
+    ]
+    ws_r.column_dimensions["A"].width = 28
+    ws_r.column_dimensions["B"].width = 22
+    for r, (label, val) in enumerate(resumo, 1):
+        ws_r.cell(r, 1, label).font = Font(bold=True)
+        ws_r.cell(r, 2, val)
+
+    # serializa em memória e retorna
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    filename = f"finops_{date.today()}.xlsx"
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 # ---------------------------------------------------------------------------
