@@ -82,3 +82,7 @@ class User(AuditMixin, Base):
     __tablename__ = "users"
     username: Mapped[str] = mapped_column(String(80), unique=True)
     password_hash: Mapped[str] = mapped_column(String(256))
+    role: Mapped[str] = mapped_column(String(20), default="viewer")  # 'admin' | 'viewer'
+    email: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    phone: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    recovery_email: Mapped[str | None] = mapped_column(String(160), nullable=True)

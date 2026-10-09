@@ -1,0 +1,7 @@
+# Override para acesso na REDE LOCAL (LAN) antes do Cloudflare Tunnel.
+# Uso: docker compose -f docker-compose.yml -f docker-compose.lan.yml up -d api nginx
+# Expõe o Nginx em todas as interfaces (porta 8080) para acesso em http://192.168.15.5:8080
+services:
+  nginx:
+    ports:
+      - "0.0.0.0:8080:80"

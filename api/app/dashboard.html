@@ -176,6 +176,17 @@ body{background:#071321;color:#eaf1fb;font:14px/1.5 Inter,system-ui,sans-serif}
 .empty{color:#90a8c1;padding:32px 0;text-align:center;font-size:13px}
 .empty big{display:block;font-size:28px;margin-bottom:8px}
 
+/* ── controle de acesso: esconde ações de escrita para viewer ──────── */
+body.role-viewer .admin-only{display:none!important}
+.viewer-banner{display:none;background:#1a2d3f;border:1px solid #2b4866;
+  border-radius:10px;padding:10px 14px;margin-bottom:16px;font-size:12px;color:#9db2c9}
+body.role-viewer .viewer-banner{display:flex;align-items:center;gap:8px}
+.viewer-banner b{color:#7fb0e0}
+
+/* link secundário (criar conta / voltar) */
+.link-btn{background:transparent;border:0;color:#7fb0e0;cursor:pointer;
+  font:inherit;text-decoration:underline;padding:8px;margin-top:4px}
+
 /* ── auth ──────────────────────────────────────────────────────── */
 .auth-overlay{display:flex;position:fixed;inset:0;z-index:200;
               background:#020914;align-items:center;justify-content:center;padding:18px}
@@ -292,6 +303,9 @@ let _debts      = [];
 let _sources    = [];
 let _categories = [];
 let _currentPage = 'dashboard';
+let _role       = null; // 'admin' | 'viewer'
+
+const isAdmin = () => _role === 'admin';
 
 /* ── api helper ─────────────────────────────────────────────────── */
 async function api(method, path, body) {
@@ -635,12 +649,14 @@ async function pageDashboard(main) {
       <h1>Visão financeira</h1>
     </div>
     <div class="head-actions">
-      <button class="btn" onclick="openPaymentForm()">Registrar pagamento</button>
-      <button class="btn primary" onclick="openExpenseForm()">+ Novo lançamento</button>
-      <button class="btn success" onclick="exportExcel()">⬇ Exportar Excel</button>
+      <button class="btn admin-only" onclick="openPaymentForm()">Registrar pagamento</button>
+      <button class="btn primary admin-only" onclick="openExpenseForm()">+ Novo lançamento</button>
+      <button class="btn success admin-only" onclick="exportExcel()">⬇ Exportar Excel</button>
       <button class="btn" onclick="showPage('receitas')">Gerenciar dados</button>
     </div>
   </div>
+
+  <div class="viewer-banner">👁 <b>Modo somente leitura</b> &nbsp;— seu perfil pode visualizar os dados, mas não editar nem exportar.</div>
 
   <div class="metrics">
     ${metrics.map(m=>`
@@ -670,12 +686,13 @@ async function pageDashboard(main) {
     <div class="panel">
       <div class="panel-title">Comandos rápidos</div>
       <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:4px">
-        <button class="btn" onclick="openIncomeForm()">+ Receita</button>
-        <button class="btn" onclick="openExpenseForm()">+ Despesa</button>
-        <button class="btn" onclick="openDebtForm()">+ Dívida</button>
-        <button class="btn" onclick="openPaymentForm()">+ Pagamento</button>
-        <button class="btn" onclick="openSourceForm()">+ Fonte de renda</button>
-        <button class="btn success" onclick="exportExcel()">⬇ Excel</button>
+        <button class="btn admin-only" onclick="openIncomeForm()">+ Receita</button>
+        <button class="btn admin-only" onclick="openExpenseForm()">+ Despesa</button>
+        <button class="btn admin-only" onclick="openDebtForm()">+ Dívida</button>
+        <button class="btn admin-only" onclick="openPaymentForm()">+ Pagamento</button>
+        <button class="btn admin-only" onclick="openSourceForm()">+ Fonte de renda</button>
+        <button class="btn success admin-only" onclick="exportExcel()">⬇ Excel</button>
+        <span class="viewer-banner" style="margin:0">👁 Somente leitura</span>
       </div>
     </div>
   </div>`;
@@ -690,8 +707,8 @@ async function pageReceitas(main) {
   <div class="page-head">
     <div><div class="eyebrow">FINANCEIRO</div><h1>Receitas</h1></div>
     <div class="head-actions">
-      <button class="btn primary" onclick="openIncomeForm()">+ Nova receita</button>
-      <button class="btn" onclick="openSourceForm()">+ Fonte de renda</button>
+      <button class="btn primary admin-only" onclick="openIncomeForm()">+ Nova receita</button>
+      <button class="btn admin-only" onclick="openSourceForm()">+ Fonte de renda</button>
     </div>
   </div>
   <div class="filters">
@@ -712,7 +729,7 @@ async function pageReceitas(main) {
     <table class="data-table" id="tbl_receitas">
       <thead><tr>
         <th>Descrição</th><th>Valor</th><th>Data</th>
-        <th>Categoria</th><th>Tipo</th><th style="text-align:right">Ações</th>
+        <th>Categoria</th><th>Tipo</th>${isAdmin()?'<th style="text-align:right">Ações</th>':''}
       </tr></thead>
       <tbody>
         ${rows.length ? rows.map(x=>`<tr
@@ -724,10 +741,10 @@ async function pageReceitas(main) {
           <td>${x.received_on||''}</td>
           <td>${x.category||''}</td>
           <td>${x.income_type||''}</td>
-          <td class="td-actions">
+          ${isAdmin()?`<td class="td-actions">
             <button class="btn sm" onclick="openEdit('incomes',${x.id})">Editar</button>
             <button class="btn sm danger" onclick="doDelete('incomes',${x.id},'${esc(x.description)}')">Excluir</button>
-          </td>
+          </td>`:''}
         </tr>`).join('') : '<tr><td colspan="6"><div class="empty"><big>📥</big>Nenhuma receita cadastrada.</div></td></tr>'}
       </tbody>
     </table>
@@ -745,7 +762,7 @@ async function pageDespesas(main) {
   <div class="page-head">
     <div><div class="eyebrow">FINANCEIRO</div><h1>Despesas</h1></div>
     <div class="head-actions">
-      <button class="btn primary" onclick="openExpenseForm()">+ Nova despesa</button>
+      <button class="btn primary admin-only" onclick="openExpenseForm()">+ Nova despesa</button>
     </div>
   </div>
   <div class="filters">
@@ -775,7 +792,7 @@ async function pageDespesas(main) {
     <table class="data-table" id="tbl_despesas">
       <thead><tr>
         <th>Descrição</th><th>Valor</th><th>Vencimento</th>
-        <th>Categoria</th><th>Status</th><th style="text-align:right">Ações</th>
+        <th>Categoria</th><th>Status</th>${isAdmin()?'<th style="text-align:right">Ações</th>':''}
       </tr></thead>
       <tbody>
         ${rows.length ? rows.map(x=>{
@@ -793,10 +810,10 @@ async function pageDespesas(main) {
             <td>${x.due_on||''}</td>
             <td>${x.category||''}</td>
             <td><span class="badge ${stBadge}">${x.status}</span></td>
-            <td class="td-actions">
+            ${isAdmin()?`<td class="td-actions">
               <button class="btn sm" onclick="openEdit('expenses',${x.id})">Editar</button>
               <button class="btn sm danger" onclick="doDelete('expenses',${x.id},'${esc(x.description)}')">Excluir</button>
-            </td>
+            </td>`:''}
           </tr>`;
         }).join('') : '<tr><td colspan="6"><div class="empty"><big>💸</big>Nenhuma despesa cadastrada.</div></td></tr>'}
       </tbody>
@@ -818,7 +835,7 @@ async function pageDividas(main) {
   <div class="page-head">
     <div><div class="eyebrow">FINANCEIRO</div><h1>Dívidas</h1></div>
     <div class="head-actions">
-      <button class="btn primary" onclick="openDebtForm()">+ Nova dívida</button>
+      <button class="btn primary admin-only" onclick="openDebtForm()">+ Nova dívida</button>
     </div>
   </div>
   <div class="filters">
@@ -871,10 +888,10 @@ async function pageDividas(main) {
           <div style="text-align:right">
             <div style="font-size:18px;font-weight:800;color:#ffb17c">${br(x.current_balance)}</div>
             <div style="font-size:11px;color:#7a90a8">de ${br(x.original_amount)}</div>
-            <div class="td-actions" style="margin-top:8px">
+            ${isAdmin()?`<div class="td-actions" style="margin-top:8px">
               <button class="btn sm" onclick="openEdit('debts',${x.id})">Editar</button>
               <button class="btn sm danger" onclick="doDelete('debts',${x.id},'${esc(x.creditor)}')">Excluir</button>
-            </div>
+            </div>`:''}
           </div>
         </div>
       </div>`;
@@ -891,7 +908,7 @@ async function pagePagamentos(main) {
   <div class="page-head">
     <div><div class="eyebrow">FINANCEIRO</div><h1>Pagamentos</h1></div>
     <div class="head-actions">
-      <button class="btn primary" onclick="openPaymentForm()">+ Registrar pagamento</button>
+      <button class="btn primary admin-only" onclick="openPaymentForm()">+ Registrar pagamento</button>
     </div>
   </div>
   <div class="filters">
@@ -912,7 +929,7 @@ async function pagePagamentos(main) {
     <table class="data-table" id="tbl_pagamentos">
       <thead><tr>
         <th>Dívida ID</th><th>Valor</th><th>Data</th>
-        <th>Método</th><th>Observações</th><th style="text-align:right">Ações</th>
+        <th>Método</th><th>Observações</th>${isAdmin()?'<th style="text-align:right">Ações</th>':''}
       </tr></thead>
       <tbody>
         ${rows.length ? rows.map(x=>{
@@ -927,9 +944,9 @@ async function pagePagamentos(main) {
             <td>${x.paid_on||''}</td>
             <td>${x.method||''}</td>
             <td style="color:#9db2c9">${x.notes||''}</td>
-            <td class="td-actions">
+            ${isAdmin()?`<td class="td-actions">
               <button class="btn sm danger" onclick="doDelete('payments',${x.id},'pagamento #${x.id}')">Excluir</button>
-            </td>
+            </td>`:''}
           </tr>`;
         }).join('') : '<tr><td colspan="6"><div class="empty"><big>💳</big>Nenhum pagamento registrado.</div></td></tr>'}
       </tbody>
@@ -988,10 +1005,14 @@ async function exportExcel() {
 function esc(s) { return String(s).replace(/'/g,"\\'").replace(/"/g,'&quot;'); }
 
 /* ══ AUTH ══════════════════════════════════════════════════════════ */
+let _authMode = 'login'; // 'login' | 'signup'
+
 async function initAuth() {
   const st = await api('GET','auth/status');
 
   if (st.authenticated) {
+    _role = st.role || 'viewer';
+    document.body.classList.toggle('role-viewer', _role !== 'admin');
     $('#authOverlay').style.display = 'none';
     $('#appShell').style.display = 'grid';
     await refreshCache();
@@ -1000,31 +1021,88 @@ async function initAuth() {
   }
 
   const setup = !st.configured;
-  $('#authTitle').textContent = setup ? 'Criar acesso' : 'Entrar no FL77 FinOps';
-  $('#authSub').textContent   = setup
-    ? 'Configure as credenciais para proteger seus dados.'
-    : 'Use suas credenciais para acessar o painel.';
+  if (setup) return renderSetupForm();
+  if (_authMode === 'signup') return renderSignupForm();
+  renderLoginForm();
+}
 
+/* primeira execução — cria o administrador master */
+function renderSetupForm() {
+  $('#authTitle').textContent = 'Criar acesso de administrador';
+  $('#authSub').textContent   = 'Primeiro acesso: defina o usuário administrador do sistema.';
+  $('#authForm').innerHTML = `
+    <div class="fld"><label>Usuário (e-mail do admin)</label>
+      <input name="username" required minlength="3" autocomplete="username"></div>
+    <div class="fld"><label>Senha</label>
+      <input name="password" type="password" required minlength="8" autocomplete="new-password"></div>
+    <div class="form-actions" style="justify-content:center;border:0;padding-top:8px">
+      <button type="submit" class="btn primary" style="width:100%;padding:12px">Criar administrador</button>
+    </div>`;
+  $('#authForm').onsubmit = async e => {
+    e.preventDefault();
+    try {
+      await api('POST','auth/setup', Object.fromEntries(new FormData(e.target)));
+      initAuth();
+    } catch(err) { showNotice($('#authNotice'), err.message, 'err'); }
+  };
+}
+
+/* login normal */
+function renderLoginForm() {
+  $('#authNotice').className = 'notice';
+  $('#authTitle').textContent = 'Entrar no FL77 FinOps';
+  $('#authSub').textContent   = 'Use suas credenciais para acessar o painel.';
   $('#authForm').innerHTML = `
     <div class="fld"><label>Usuário</label>
       <input name="username" required minlength="3" autocomplete="username"></div>
     <div class="fld"><label>Senha</label>
       <input name="password" type="password" required minlength="8" autocomplete="current-password"></div>
     <div class="form-actions" style="justify-content:center;border:0;padding-top:8px">
-      <button type="submit" class="btn primary" style="width:100%;padding:12px">
-        ${setup ? 'Criar acesso' : 'Entrar'}
-      </button>
-    </div>`;
-
+      <button type="submit" class="btn primary" style="width:100%;padding:12px">Entrar</button>
+    </div>
+    <button type="button" class="link-btn" onclick="_authMode='signup';initAuth()">
+      Não tem acesso? Criar uma conta
+    </button>`;
   $('#authForm').onsubmit = async e => {
     e.preventDefault();
-    const d = Object.fromEntries(new FormData(e.target));
     try {
-      await api('POST', setup ? 'auth/setup' : 'auth/login', d);
+      await api('POST','auth/login', Object.fromEntries(new FormData(e.target)));
+      _authMode = 'login';
       initAuth();
-    } catch(err) {
-      showNotice($('#authNotice'), err.message, 'err');
-    }
+    } catch(err) { showNotice($('#authNotice'), err.message, 'err'); }
+  };
+}
+
+/* cadastro de novo usuário — perfil SOMENTE LEITURA */
+function renderSignupForm() {
+  $('#authNotice').className = 'notice';
+  $('#authTitle').textContent = 'Criar conta';
+  $('#authSub').textContent   = 'Novos usuários têm acesso de visualização (somente leitura).';
+  $('#authForm').innerHTML = `
+    <div class="fld"><label>Usuário (login)</label>
+      <input name="username" required minlength="3" placeholder="ex.: ligia.antonelli"></div>
+    <div class="fld"><label>E-mail</label>
+      <input name="email" type="email" required placeholder="voce@exemplo.com"></div>
+    <div class="fld"><label>Telefone</label>
+      <input name="phone" required placeholder="(11) 99999-9999"></div>
+    <div class="fld"><label>E-mail de recuperação</label>
+      <input name="recovery_email" type="email" required placeholder="recuperacao@exemplo.com"></div>
+    <div class="fld"><label>Senha</label>
+      <input name="password" type="password" required minlength="8" autocomplete="new-password"></div>
+    <div class="form-actions" style="justify-content:center;border:0;padding-top:8px">
+      <button type="submit" class="btn primary" style="width:100%;padding:12px">Criar conta</button>
+    </div>
+    <button type="button" class="link-btn" onclick="_authMode='login';initAuth()">
+      Já tenho conta — voltar ao login
+    </button>`;
+  $('#authForm').onsubmit = async e => {
+    e.preventDefault();
+    try {
+      await api('POST','auth/signup', Object.fromEntries(new FormData(e.target)));
+      showNotice($('#authNotice'), 'Conta criada! Faça login para entrar.', 'ok');
+      _authMode = 'login';
+      setTimeout(initAuth, 1200);
+    } catch(err) { showNotice($('#authNotice'), err.message, 'err'); }
   };
 }
 

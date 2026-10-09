@@ -28,6 +28,13 @@ class AuthIn(BaseModel):
     username: str = Field(min_length=3, max_length=80)
     password: str = Field(min_length=8, max_length=200)
 
+class SignupIn(BaseModel):
+    username: str = Field(min_length=3, max_length=80)   # usado como login (pode ser e-mail)
+    password: str = Field(min_length=8, max_length=200)
+    email: str = Field(min_length=5, max_length=160)
+    phone: str = Field(min_length=8, max_length=40)
+    recovery_email: str = Field(min_length=5, max_length=160)
+
 class ExpenseIn(BaseModel):
     description: str = Field(max_length=160); amount: Decimal = Field(gt=0); due_on: date
     paid_on: date | None = None; category: str = "Outros"; status: str = "pendente"; recurring: bool = False; notes: str | None = None

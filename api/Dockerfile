@@ -27,6 +27,11 @@ COPY --from=builder /install /usr/local
 # Copia o código da aplicação
 COPY app/ ./app/
 
+# Cria o diretório de dados com posse do usuário 'app' ANTES de declarar o
+# volume. Assim o volume Docker herda a posse correta e o SQLite consegue
+# criar/gravar o arquivo rodando como usuário não-root.
+RUN mkdir -p /data && chown -R app:app /data
+
 # Volume para o banco SQLite persistir fora do container
 VOLUME ["/data"]
 

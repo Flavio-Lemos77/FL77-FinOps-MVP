@@ -105,6 +105,58 @@ def authenticated(request: Request) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Autorização por papel (role)
+# ---------------------------------------------------------------------------
+# O administrador master é sempre este e-mail/usuário. Ele tem acesso full.
+# Qualquer outro usuário entra como "viewer" (somente leitura).
+ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "sp7.m23@hotmail.com")
+
+
+def current_username(request: Request) -> str | None:
+    """Extrai o username do cookie de sessão válido."""
+    token = request.cookies.get("fl77_session", "")
+    if "." not in token:
+        return None
+    username, signature = token.rsplit(".", 1)
+    expected = hmac.new(
+        SESSION_SECRET.encode(), username.encode(), hashlib.sha256
+    ).hexdigest()
+    return username if hmac.compare_digest(signature, expected) else None
+
+
+def current_user(request: Request, db: Session) -> User | None:
+    uname = current_username(request)
+    if not uname:
+        return None
+    return db.scalar(select(User).where(User.username == uname))
+
+
+def effective_role(user: User | None) -> str:
+    """O admin master é sempre admin, independentemente do que está no banco."""
+    if user is None:
+        return "viewer"
+    if user.username == ADMIN_USERNAME:
+        return "admin"
+    return user.role or "viewer"
+
+
+def require_admin(request: Request, db: Session = None):
+    """Dependency: bloqueia a operação se o usuário não for admin."""
+    from .database import SessionLocal
+    close = False
+    if db is None:
+        db = SessionLocal()
+        close = True
+    try:
+        user = current_user(request, db)
+        if effective_role(user) != "admin":
+            raise HTTPException(403, "Apenas o administrador pode realizar esta ação.")
+    finally:
+        if close:
+            db.close()
+
+
+# ---------------------------------------------------------------------------
 # Lifespan (substitui o @app.on_event depreciado)
 # ---------------------------------------------------------------------------
 
@@ -159,6 +211,26 @@ def _initialize_database() -> None:
                         f"ALTER TABLE debts ADD COLUMN {col_name} {definition}"
                     )
 
+            user_cols = {
+                col[1]
+                for col in conn.exec_driver_sql("PRAGMA table_info(users)")
+            }
+            for col_name, definition in [
+                ("role", "VARCHAR(20) DEFAULT 'viewer'"),
+                ("email", "VARCHAR(160)"),
+                ("phone", "VARCHAR(40)"),
+                ("recovery_email", "VARCHAR(160)"),
+            ]:
+                if col_name not in user_cols:
+                    conn.exec_driver_sql(
+                        f"ALTER TABLE users ADD COLUMN {col_name} {definition}"
+                    )
+            # Garante que o admin master tenha role=admin
+            conn.exec_driver_sql(
+                "UPDATE users SET role='admin' WHERE username=?",
+                (ADMIN_USERNAME,),
+            )
+
     # Seed das categorias padrão na primeira execução
     with Session(engine) as db:
         if not db.scalar(select(func.count()).select_from(Category)):
@@ -202,13 +274,37 @@ app.mount(
 
 @app.middleware("http")
 async def local_auth(request: Request, call_next):
-    """Protege todas as rotas /api/ exceto /api/auth/*."""
-    if (
-        request.url.path.startswith("/api/")
-        and not request.url.path.startswith("/api/auth/")
-        and not authenticated(request)
-    ):
-        return JSONResponse({"detail": "Autenticação necessária"}, status_code=401)
+    """Protege /api/ e impõe autorização por papel (role).
+
+    - Rotas /api/auth/* são públicas (login, signup, status).
+    - Demais /api/ exigem sessão válida.
+    - Escrita (POST/PUT/DELETE) e exportação só para admin.
+      Viewers têm acesso somente leitura (GET).
+    """
+    path = request.url.path
+
+    if path.startswith("/api/") and not path.startswith("/api/auth/"):
+        if not authenticated(request):
+            return JSONResponse({"detail": "Autenticação necessária"}, status_code=401)
+
+        # autorização por papel — defesa no backend (não confia no frontend)
+        from .database import SessionLocal
+        db = SessionLocal()
+        try:
+            user = current_user(request, db)
+            role = effective_role(user)
+        finally:
+            db.close()
+
+        is_write  = request.method in ("POST", "PUT", "PATCH", "DELETE")
+        is_export = path.startswith("/api/export")
+
+        if role != "admin" and (is_write or is_export):
+            return JSONResponse(
+                {"detail": "Seu perfil é somente leitura. Ação não permitida."},
+                status_code=403,
+            )
+
     return await call_next(request)
 
 
@@ -223,9 +319,12 @@ def health():
 
 @app.get("/api/auth/status")
 def auth_status(request: Request, db: Session = Depends(get_db)):
+    user = current_user(request, db)
     return {
         "configured": db.scalar(select(func.count()).select_from(User)) > 0,
         "authenticated": authenticated(request),
+        "role": effective_role(user) if user else None,
+        "username": user.username if user else None,
     }
 
 
@@ -233,7 +332,9 @@ def auth_status(request: Request, db: Session = Depends(get_db)):
 def auth_setup(data: AuthIn, response: Response, db: Session = Depends(get_db)):
     if db.scalar(select(func.count()).select_from(User)) > 0:
         raise HTTPException(409, "O acesso local já foi configurado")
-    db.add(User(username=data.username, password_hash=password_hash(data.password)))
+    # O primeiro usuário criado vira admin.
+    role = "admin" if data.username == ADMIN_USERNAME else "admin"
+    db.add(User(username=data.username, password_hash=password_hash(data.password), role=role))
     db.commit()
     response.set_cookie(
         "fl77_session",
@@ -243,6 +344,30 @@ def auth_setup(data: AuthIn, response: Response, db: Session = Depends(get_db)):
         secure=SECURE_COOKIE,
     )
     return {"ok": True}
+
+
+@app.post("/api/auth/signup", status_code=201)
+def auth_signup(data: SignupIn, db: Session = Depends(get_db)):
+    """Cadastro público de um novo usuário com perfil SOMENTE LEITURA (viewer).
+
+    Pede e-mail, telefone e e-mail de recuperação. O admin master nunca é
+    criado por aqui. Não autentica automaticamente: após cadastrar, a pessoa
+    faz login normalmente.
+    """
+    if db.scalar(select(User).where(User.username == data.username)):
+        raise HTTPException(409, "Este usuário já existe.")
+    if data.username == ADMIN_USERNAME:
+        raise HTTPException(403, "Este e-mail é reservado ao administrador.")
+    db.add(User(
+        username=data.username,
+        password_hash=password_hash(data.password),
+        role="viewer",
+        email=data.email,
+        phone=data.phone,
+        recovery_email=data.recovery_email,
+    ))
+    db.commit()
+    return {"ok": True, "role": "viewer"}
 
 
 @app.post("/api/auth/login")
@@ -264,7 +389,7 @@ def auth_login(data: AuthIn, request: Request, response: Response, db: Session =
         samesite="strict",
         secure=SECURE_COOKIE,
     )
-    return {"ok": True}
+    return {"ok": True, "role": effective_role(user)}
 
 
 @app.post("/api/auth/logout")
