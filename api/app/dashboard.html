@@ -262,6 +262,9 @@ body.role-viewer .viewer-banner{display:flex;align-items:center;gap:8px}
       <button class="nav-btn" onclick="showPage('pagamentos')">
         <span class="icon">✓</span> Pagamentos
       </button>
+      <button class="nav-btn" onclick="showPage('simulador')">
+        <span class="icon">🏠</span> Simulador
+      </button>
     </nav>
     <div class="session-box">
       <b>◉ Sessão protegida</b>
@@ -691,7 +694,7 @@ async function refreshCache() {
 function showPage(page) {
   _currentPage = page;
   $$('.nav-btn').forEach(b => b.classList.remove('active'));
-  const idx = {dashboard:0,bi:1,receitas:2,despesas:3,dividas:4,pagamentos:5};
+  const idx = {dashboard:0,bi:1,receitas:2,despesas:3,dividas:4,pagamentos:5,simulador:6};
   const btns = $$('.nav-btn');
   if (btns[idx[page]]) btns[idx[page]].classList.add('active');
   renderPage(page);
@@ -707,6 +710,7 @@ async function renderPage(page) {
     else if (page === 'despesas')   await pageDespesas(main);
     else if (page === 'dividas')    await pageDividas(main);
     else if (page === 'pagamentos') await pagePagamentos(main);
+    else if (page === 'simulador')  await pageSimulador(main);
   } catch(err) {
     main.innerHTML = `<div class="empty"><big>⚠</big>${err.message}</div>`;
   }
@@ -956,6 +960,253 @@ async function pageBI(main) {
       </div>
     </div>
   </div>`;
+}
+
+/* ══ SIMULADOR DE CENÁRIOS (venda x locação do imóvel) ═════════════ */
+/* Laboratório financeiro: lê suas dívidas reais mas NÃO grava nada.    */
+
+// valores padrão vindos da sua análise — todos editáveis na tela
+const SIM_DEFAULTS = {
+  preco_venda: 270000,
+  saldo_quitacao: 199000,
+  corretagem_pct: 5,
+  imposto_pct: 0,
+  prestacao: 1914,
+  condominio: 465,
+  aluguel_novo: 1400,
+  aluguel_recebido: 2000,
+};
+
+function simNum(id){ return parseFloat(($('#'+id)||{}).value) || 0; }
+
+async function pageSimulador(main) {
+  const debts = await api('GET','debts');
+  _debts = debts;
+  const ativas = debts.filter(d => d.status !== 'quitada');
+
+  main.innerHTML = `
+  <div class="page-head">
+    <div><div class="eyebrow">LABORATÓRIO FINANCEIRO</div><h1>Simulador de cenários</h1></div>
+    <div class="head-actions">
+      <span style="font-size:11px;color:#8fa6c0">🔒 Simulação — nada é gravado</span>
+    </div>
+  </div>
+
+  <div style="background:#0e2236;border:1px solid #2b4866;border-radius:10px;padding:12px 14px;
+       font-size:12px;color:#8fa6c0;margin-bottom:16px">
+    💡 Preencha os parâmetros do seu imóvel e compare <b style="color:#7fb0e0">vender</b>,
+    <b style="color:#7fb0e0">alugar</b> ou <b style="color:#7fb0e0">manter</b>. Os valores já vêm
+    preenchidos com a sua análise — ajuste à vontade. Nenhum lançamento real é criado.
+  </div>
+
+  <!-- Parâmetros do imóvel -->
+  <div class="panel" style="margin-bottom:14px">
+    <div class="panel-title">Parâmetros do imóvel</div>
+    <div class="form-row">
+      <div class="fld"><label>Preço de venda (R$)</label>
+        <input id="sim_preco" type="number" step="0.01" value="${SIM_DEFAULTS.preco_venda}" oninput="runSim()"></div>
+      <div class="fld"><label>Saldo devedor a quitar (R$)</label>
+        <input id="sim_saldo" type="number" step="0.01" value="${SIM_DEFAULTS.saldo_quitacao}" oninput="runSim()"></div>
+    </div>
+    <div class="form-row">
+      <div class="fld"><label>Corretagem (%)</label>
+        <input id="sim_corr" type="number" step="0.1" value="${SIM_DEFAULTS.corretagem_pct}" oninput="runSim()"></div>
+      <div class="fld"><label>Imposto sobre ganho (%)</label>
+        <input id="sim_imp" type="number" step="0.1" value="${SIM_DEFAULTS.imposto_pct}" oninput="runSim()"></div>
+    </div>
+    <div class="form-row">
+      <div class="fld"><label>Prestação atual (R$/mês)</label>
+        <input id="sim_prest" type="number" step="0.01" value="${SIM_DEFAULTS.prestacao}" oninput="runSim()"></div>
+      <div class="fld"><label>Condomínio atual (R$/mês)</label>
+        <input id="sim_cond" type="number" step="0.01" value="${SIM_DEFAULTS.condominio}" oninput="runSim()"></div>
+    </div>
+    <div class="form-row">
+      <div class="fld"><label>Aluguel se locar o imóvel (recebido, R$)</label>
+        <input id="sim_alrec" type="number" step="0.01" value="${SIM_DEFAULTS.aluguel_recebido}" oninput="runSim()"></div>
+      <div class="fld"><label>Novo aluguel se você sair (R$)</label>
+        <input id="sim_alnovo" type="number" step="0.01" value="${SIM_DEFAULTS.aluguel_novo}" oninput="runSim()"></div>
+    </div>
+  </div>
+
+  <!-- Resultado dos 3 cenários -->
+  <div class="metrics" style="grid-template-columns:repeat(3,1fr);margin-bottom:14px" id="simCards"></div>
+
+  <!-- Venda: capital líquido + quitação de dívidas -->
+  <div class="panels" style="grid-template-columns:1fr 1fr">
+    <div class="panel">
+      <div class="panel-title">Cenário VENDA <small>capital liberado</small></div>
+      <div id="simVenda"></div>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Quitar dívidas com o capital <small>escolha quais</small></div>
+      <div style="margin-bottom:8px">
+        <button class="btn sm" onclick="simSugerir()">💡 Sugerir (maior juro primeiro)</button>
+        <button class="btn sm" onclick="simLimpar()">Limpar seleção</button>
+      </div>
+      <div id="simDividas">${
+        ativas.length ? ativas.map(d=>`
+          <label style="display:flex;align-items:center;gap:9px;padding:9px 0;border-bottom:1px solid #1c3650;cursor:pointer">
+            <input type="checkbox" class="sim-debt" data-id="${d.id}"
+                   data-saldo="${d.current_balance}" data-juro="${d.interest_rate||0}"
+                   style="width:auto" onchange="runSim()">
+            <span style="flex:1">
+              <b>${d.creditor}</b>
+              <small style="display:block;color:#9db2c9">${d.debt_type||'Dívida'} · juros ${(+d.interest_rate||0)}%/mês</small>
+            </span>
+            <b style="color:#ffb17c">${br(d.current_balance)}</b>
+          </label>`).join('')
+          : '<div class="empty">Nenhuma dívida ativa cadastrada.</div>'
+      }</div>
+      <div id="simQuitacao" style="margin-top:12px"></div>
+    </div>
+  </div>
+
+  <!-- Locação x Manter -->
+  <div class="panels" style="grid-template-columns:1fr 1fr;margin-top:14px">
+    <div class="panel">
+      <div class="panel-title">Cenário LOCAÇÃO <small>alugar o imóvel para terceiros</small></div>
+      <div id="simLocacao"></div>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Comparativo mensal <small>impacto no caixa</small></div>
+      <div id="simComparativo"></div>
+    </div>
+  </div>
+
+  <div class="panel" style="margin-top:14px">
+    <div class="panel-title">Recomendação</div>
+    <div id="simRecomendacao"></div>
+  </div>`;
+
+  runSim();
+}
+
+function runSim() {
+  const preco = simNum('sim_preco');
+  const saldo = simNum('sim_saldo');
+  const corrP = simNum('sim_corr');
+  const impP  = simNum('sim_imp');
+  const prest = simNum('sim_prest');
+  const cond  = simNum('sim_cond');
+  const alRec = simNum('sim_alrec');
+  const alNovo= simNum('sim_alnovo');
+
+  // ── VENDA ──────────────────────────────────────────────────────────
+  const corretagem = preco * corrP / 100;
+  const ganho = Math.max(0, preco - saldo - corretagem);
+  const imposto = ganho * impP / 100;
+  const liquido = preco - saldo - corretagem - imposto;
+
+  $('#simVenda').innerHTML = `
+    ${simLinha('Preço de venda', preco, '#eaf1fb')}
+    ${simLinha('(−) Quitação do financiamento', -saldo, '#ffb4a9')}
+    ${simLinha('(−) Corretagem ('+corrP+'%)', -corretagem, '#ffb4a9')}
+    ${impP>0?simLinha('(−) Imposto ganho ('+impP+'%)', -imposto, '#ffb4a9'):''}
+    <div style="border-top:1px solid #2b4866;margin-top:8px;padding-top:8px">
+      ${simLinha('= Capital líquido liberado', liquido, '#64deb8', true)}
+    </div>
+    <div style="font-size:11px;color:#7a90a8;margin-top:8px">
+      Não é lucro: é o que sobra após quitar a dívida do imóvel e pagar a corretagem.
+    </div>`;
+
+  // ── Quitação de dívidas com o capital líquido ──────────────────────
+  const marcadas = Array.from($$('.sim-debt')).filter(c=>c.checked);
+  const somaSel = marcadas.reduce((s,c)=>s+(+c.dataset.saldo||0),0);
+  const restante = liquido - somaSel;
+  const jurosEcon = marcadas.reduce((s,c)=>s+(+c.dataset.saldo||0)*(+c.dataset.juro||0)/100,0);
+
+  $('#simQuitacao').innerHTML = marcadas.length ? `
+    <div style="background:#0e2236;border-radius:8px;padding:10px 12px">
+      ${simLinha('Capital líquido', liquido, '#64deb8')}
+      ${simLinha('(−) Dívidas selecionadas ('+marcadas.length+')', -somaSel, '#ffb4a9')}
+      <div style="border-top:1px solid #2b4866;margin-top:6px;padding-top:6px">
+        ${simLinha(restante>=0?'= Sobra de capital':'= Faltam', restante, restante>=0?'#64deb8':'#f97066', true)}
+      </div>
+      <div style="font-size:11px;color:#64deb8;margin-top:8px">
+        💰 Economia estimada de ~${br(jurosEcon)}/mês em juros ao quitar essas dívidas.
+      </div>
+    </div>` : '<div style="font-size:12px;color:#8fa6c0">Selecione dívidas acima para simular a quitação.</div>';
+
+  // ── LOCAÇÃO ────────────────────────────────────────────────────────
+  const fluxoLoc = alRec - cond - prest;
+  $('#simLocacao').innerHTML = `
+    ${simLinha('Aluguel recebido', alRec, '#64deb8')}
+    ${simLinha('(−) Condomínio', -cond, '#ffb4a9')}
+    ${simLinha('(−) Prestação', -prest, '#ffb4a9')}
+    <div style="border-top:1px solid #2b4866;margin-top:8px;padding-top:8px">
+      ${simLinha(fluxoLoc>=0?'= Superávit mensal':'= Déficit mensal', fluxoLoc, fluxoLoc>=0?'#64deb8':'#f97066', true)}
+    </div>
+    <div style="font-size:11px;color:#7a90a8;margin-top:8px">
+      ${fluxoLoc<0 ? 'Você precisaria cobrir esse valor todo mês, além de IPTU, manutenção e vacância.' :
+                     'Fluxo positivo, mas considere IPTU, manutenção e vacância.'}
+    </div>`;
+
+  // ── COMPARATIVO mensal: manter x locar x vender+sair ───────────────
+  const custoManter = prest + cond;                 // você morando (gasto fixo)
+  const custoVender = alNovo;                        // você sai e aluga menor (0 se morar c/ familia)
+  const economiaVenda = custoManter - custoVender;   // economia mensal ao vender
+  $('#simComparativo').innerHTML = `
+    ${simLinha('Hoje (prestação + condomínio)', -custoManter, '#ffb4a9')}
+    ${simLinha('Locando (déficit de caixa)', fluxoLoc, fluxoLoc>=0?'#64deb8':'#f97066')}
+    ${simLinha('Vendendo + novo aluguel', -custoVender, custoVender>0?'#ffb4a9':'#64deb8')}
+    <div style="border-top:1px solid #2b4866;margin-top:8px;padding-top:8px">
+      ${simLinha('Economia mensal vendendo', economiaVenda, economiaVenda>=0?'#64deb8':'#f97066', true)}
+      ${simLinha('Economia anual vendendo', economiaVenda*12, economiaVenda>=0?'#64deb8':'#f97066')}
+    </div>`;
+
+  // ── Cards resumo ────────────────────────────────────────────────────
+  $('#simCards').innerHTML = `
+    <div class="metric-card m-balance"><label>Capital líquido (venda)</label>
+      <strong>${br(liquido)}</strong><span>após quitar imóvel + corretagem</span></div>
+    <div class="metric-card ${fluxoLoc>=0?'m-income':'m-commit'}"><label>Fluxo mensal (locação)</label>
+      <strong>${br(fluxoLoc)}</strong><span>${fluxoLoc>=0?'superávit':'déficit por mês'}</span></div>
+    <div class="metric-card m-income"><label>Economia mensal (venda)</label>
+      <strong>${br(economiaVenda)}</strong><span>${br(economiaVenda*12)} por ano</span></div>`;
+
+  // ── Recomendação dinâmica ───────────────────────────────────────────
+  let rec;
+  if (fluxoLoc < 0 && economiaVenda > 0) {
+    rec = `A <b style="color:#64deb8">venda</b> se mostra mais vantajosa: a locação geraria déficit de
+      <b style="color:#f97066">${br(Math.abs(fluxoLoc))}/mês</b>, enquanto vender libera
+      <b style="color:#64deb8">${br(liquido)}</b> e reduz seu custo mensal em
+      <b style="color:#64deb8">${br(economiaVenda)}</b> (${br(economiaVenda*12)}/ano).
+      ${marcadas.length?`Com o capital, você quitaria ${marcadas.length} dívida(s) e economizaria ~${br(jurosEcon)}/mês em juros.`:'Selecione dívidas acima para ver o impacto da quitação.'}`;
+  } else if (fluxoLoc >= 0) {
+    rec = `A <b style="color:#64deb8">locação</b> se tornou viável com os valores atuais (superávit de
+      <b style="color:#64deb8">${br(fluxoLoc)}/mês</b>). Compare com o capital liberado na venda
+      (<b>${br(liquido)}</b>) e seu objetivo de longo prazo.`;
+  } else {
+    rec = `Com os parâmetros atuais, nem a venda nem a locação mostram vantagem clara de caixa.
+      Reavalie o preço de venda ou os custos de moradia.`;
+  }
+  $('#simRecomendacao').innerHTML = `<div style="font-size:13px;color:#c7d4e3;line-height:1.6">${rec}</div>`;
+}
+
+function simLinha(label, valor, cor, bold=false) {
+  return `<div style="display:flex;justify-content:space-between;padding:4px 0;${bold?'font-size:15px':'font-size:13px'}">
+    <span style="color:#9db2c9">${label}</span>
+    <b style="color:${cor};${bold?'font-weight:800':''}">${br(valor)}</b>
+  </div>`;
+}
+
+function simSugerir() {
+  // marca dívidas da maior taxa de juro para a menor, até o capital acabar
+  const liquido = (() => { runSim(); const p=simNum('sim_preco'),s=simNum('sim_saldo'),c=simNum('sim_corr'),i=simNum('sim_imp');
+    const corr=p*c/100, ganho=Math.max(0,p-s-corr), imp=ganho*i/100; return p-s-corr-imp; })();
+  const checks = Array.from($$('.sim-debt'))
+    .sort((a,b)=>(+b.dataset.juro||0)-(+a.dataset.juro||0));
+  let rest = liquido;
+  checks.forEach(c=>{
+    const saldo = +c.dataset.saldo||0;
+    if (saldo <= rest) { c.checked = true; rest -= saldo; }
+    else { c.checked = false; }
+  });
+  runSim();
+}
+
+function simLimpar() {
+  $$('.sim-debt').forEach(c=>c.checked=false);
+  runSim();
 }
 
 /* ── RECEITAS ─────────────────────────────────────────────────────── */
